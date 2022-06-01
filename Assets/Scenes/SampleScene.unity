@@ -783,6 +783,10 @@ PrefabInstance:
       propertyPath: controlMode
       value: 1
       objectReference: {fileID: 0}
+    - target: {fileID: 7298569719829100943, guid: 5f8e2652b4010314f817c3a3d54db04a, type: 3}
+      propertyPath: _slidingScaleStereo
+      value: 1
+      objectReference: {fileID: 0}
     - target: {fileID: 7298569719948673725, guid: 5f8e2652b4010314f817c3a3d54db04a, type: 3}
       propertyPath: m_IsActive
       value: 0
@@ -1365,7 +1369,7 @@ MonoBehaviour:
     _max: 1000
     _lifetimeMax: 10000000
     _maxLabel: MaxConvergence
-  _depthScale: 2
+  _depthScale: 4
   convergenceChangeThreshold: 0.01
   baselineChangeThreshold: 0.05
   _convergenceFocusSpeed: 0.5
