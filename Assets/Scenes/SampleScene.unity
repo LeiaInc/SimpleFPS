@@ -1299,7 +1299,7 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 963194225}
-  m_Enabled: 0
+  m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: abdccf4e71126854294439cbce320e97, type: 3}
   m_Name: 
@@ -1308,18 +1308,18 @@ MonoBehaviour:
     _min: 1
     _lifetimeMin: 0
     _minLabel: MinBaseline
-    _max: 10
+    _max: 5
     _lifetimeMax: 100
     _maxLabel: MaxBaseline
   _convergenceRange:
     _min: 1
     _lifetimeMin: 0.00001
     _minLabel: MinConvergence
-    _max: 5
+    _max: 1000
     _lifetimeMax: 10000000
     _maxLabel: MaxConvergence
   _depthScale: 1
-  convergenceChangeThreshold: 0.01
+  convergenceChangeThreshold: 0.4
   baselineChangeThreshold: 0.05
   _convergenceFocusSpeed: 0.5
   _baselineFocusSpeed: 0.1
@@ -1350,7 +1350,7 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 963194225}
-  m_Enabled: 1
+  m_Enabled: 0
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 963d7f86fc35e144ea8d584dbc22c4db, type: 3}
   m_Name: 

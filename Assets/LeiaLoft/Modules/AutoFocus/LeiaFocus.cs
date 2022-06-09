@@ -148,26 +148,17 @@ namespace LeiaLoft
             
             float newConvergence = CalculateNewConvergence();
 
-            Debug.Log("1 newConvergence = "+newConvergence);
-
             //Clamp convergence between min and max values
             newConvergence = Mathf.Clamp(newConvergence,this._convergenceRange.min,this._convergenceRange.max);
-            
-            Debug.Log("2 newConvergence = "+newConvergence);
             
             //Prevent focus offset from causing the convergence plane to go behind the camera
             if (FocusOffset + targetConvergence < 1.0e-5f)
             {
                 FocusOffset = -targetConvergence + 1.0e-5f;
                 newConvergence = CalculateNewConvergence();
-            
-                Debug.Log("3 newConvergence = "+newConvergence);
-            
             }
 
             leiaCamera.ConvergenceDistance = newConvergence;
-            
-            Debug.Log("Calling update convergence leiaCamera.ConvergenceDistance="+leiaCamera.ConvergenceDistance);
         }
 
         private float CalculateNewConvergence()

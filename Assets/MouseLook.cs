@@ -20,7 +20,6 @@ public class MouseLook : MonoBehaviour
     // Update is called once per frame
     void Update()
     {
-        Debug.Log("Input.mousePosition = "+Input.mousePosition);
         rx -= Input.GetAxis("Mouse Y") * sensitivity; //(Input.mousePosition.y - mousePositionPrev.y) * sensitivity;
         rx = Mathf.Clamp(rx,-89f,89f);
         ry += Input.GetAxis("Mouse X") * sensitivity; //(Input.mousePosition.x - mousePositionPrev.x) * sensitivity;

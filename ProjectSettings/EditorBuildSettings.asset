@@ -5,7 +5,13 @@ EditorBuildSettings:
   m_ObjectHideFlags: 0
   serializedVersion: 2
   m_Scenes:
-  - enabled: 1
+  - enabled: 0
     path: Assets/Scenes/SampleScene.unity
     guid: 9fc0d4010bbf28b4594072e72b8655ab
+  - enabled: 0
+    path: Assets/Scenes/SampleScene 1.unity
+    guid: 09cd49d7597b90341bd8d52a4e858fc5
+  - enabled: 1
+    path: Assets/Scenes/BlockWorld.unity
+    guid: 3db90a2fc7bc2a842abc92b4c5a6c366
   m_configObjects: {}
