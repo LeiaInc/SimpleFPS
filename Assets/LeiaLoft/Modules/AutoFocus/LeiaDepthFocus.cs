@@ -5,7 +5,7 @@ using UnityEditor;
 
 namespace LeiaLoft
 {
-    [RequireComponent(typeof(LeiaCamera))]
+    [RequireComponent(typeof(LeiaDisplay))]
     [HelpURL("https://docs.leialoft.com/developer/unity-sdk/modules/auto-focus#leiadepthfocus")]
 
     public class LeiaDepthFocus : LeiaFocus, IReleasable
@@ -30,7 +30,7 @@ namespace LeiaLoft
 
         ComputeShader DepthStatsShader;
         int DepthStatsKernelID;
-        private LeiaCamera LeiaCam;
+        private LeiaDisplay LeiaDisp;
         private Camera LeiaViewCamera;
         private Camera ParentCamera;
         private readonly int DepthRenderWidth = 512;
@@ -63,7 +63,7 @@ namespace LeiaLoft
 
             if (!systemSupportsComputeShaders)
             {
-                LogUtil.Error("System doesn't support compute shaders! LeiaDepthFocus will not function correctly, disabling component.");
+                Debug.LogError("System doesn't support compute shaders! LeiaDepthFocus will not function correctly, disabling component.");
                 this.enabled = false;
                 return;
             }
@@ -73,7 +73,7 @@ namespace LeiaLoft
             );
 
             ParentCamera = GetComponent<Camera>();
-            LeiaCam = GetComponent<LeiaCamera>();
+            LeiaDisp = GetComponent<LeiaDisplay>();
 
             DepthRenderTexture = new RenderTexture(DepthRenderWidth, DepthRenderHeight, 16, RenderTextureFormat.ARGB32);
             DepthRenderTexture.name = "DepthRenderTexture";

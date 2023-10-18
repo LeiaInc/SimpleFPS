@@ -2,7 +2,7 @@
 
 namespace LeiaLoft
 {
-    [RequireComponent(typeof(LeiaCamera))]
+    [RequireComponent(typeof(LeiaDisplay))]
     [DisallowMultipleComponent]
     [HelpURL("https://docs.leialoft.com/developer/unity-sdk/modules/auto-focus#leiaraycastfocus")]
     public class LeiaRaycastFocus : LeiaFocus

@@ -11,13 +11,24 @@ namespace LeiaLoft
     /// one parent game object and assign that as the target.
     /// </summary>
     /// 
-    [RequireComponent(typeof(LeiaCamera))]
+    [RequireComponent(typeof(LeiaDisplay))]
     [DefaultExecutionOrder(-1000)]
     [HelpURL("https://docs.leialoft.com/developer/unity-sdk/modules/auto-focus#leiatargetfocus")]
     public class LeiaTargetFocus : LeiaFocus
     {
         [Tooltip("How many mesh vertices to take as sample points for determining baseline and convergence. Larger sample count will be more costly performancewise.")]
         [SerializeField, Range(1, 1000)] private int samples = 200;
+        public int Samples
+        {
+            get
+            {
+                return samples;
+            }
+            set
+            {
+                samples = Mathf.Clamp(value, 1,1000);
+            }
+        }
         [SerializeField] private GameObject _target;
         public GameObject target
         {
@@ -28,6 +39,7 @@ namespace LeiaLoft
             set
             {
                 _target = value;
+                InitTarget();
             }
         }
         
@@ -134,16 +146,12 @@ namespace LeiaLoft
                             sumCountsCurrent++;
                             float distance = Vector3.Distance(worldPoint, transform.position);
                             sumDistancesCurrent += distance;
-                            float currentAverage = sumDistancesCurrent / sumCountsCurrent;
-                            if (distance < currentAverage)
-                            {
                                 sumCounts += 1;
                                 sumDistances += distance;
                                 if (distance < closest)
                                 {
                                     closest = distance;
                                 }
-                            }
                         }
                     }
                 }

@@ -14,550 +14,221 @@
 *
 ****************************************************************
 */
-using System;
-using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
-using UnityEngine.SceneManagement;
 
 namespace LeiaLoft
 {
-    /// <summary>
-    /// Presents single display object, has state and settings (decorators) that determine rendering mode.
-    /// </summary>
-    [HelpURL("https://docs.leialoft.com/developer/unity-sdk/unity-sdk-components#leiadisplay-component")]
-    public partial class LeiaDisplay : Singleton<LeiaDisplay>, IFaceTrackingDisplay
+    [ExecuteInEditMode]
+    public class LeiaDisplay : MonoBehaviour
     {
-#pragma warning disable CS0618 // Type or member is obsolete
-        private static string VersionFileName { get { return "VERSION"; } }
+        #region Private_Variables
 
-        public float slidingScale = 1;
+        private LightfieldMode _desiredLightfieldMode;
+        private int _numViewsX = 2;
+        private int _numViewsY = 1;
 
-        private bool _blackViews = false;
-        public bool blackViews
-        {
-            get
-            {
-                return _blackViews;
-            }
-            set
-            {
-                _blackViews = value;
-            }
-        }
+        private Vector3 viewerPositionNonPredicted = new Vector3(0, 0, 535.964f);
+        private Vector3 viewerPositionPredicted = new Vector3(0, 0, 535.964f);
+        private Vector2[] _initialViewOffsets;
 
-        private bool _viewPeeling = true;
-        public bool viewPeeling
-        {
-            get
-            {
-                //When in LF mode, always do view peeling. When in Stereo, always turn off view peeling.
-                return this.DesiredRenderTechnique == RenderTechnique.Default;
-            }
-            set
-            {
-                _viewPeeling = value;
-            }
-        }
+        private RenderTexture _interlacedTexture;
+        private Material _editorPreviewMaterial;
+        private string _editorPreviewShaderName { get { return "EditorPreview"; } }
 
-        private bool _dynamicReconvergence = true;
-        public bool dynamicReconvergence
-        {
-            get
-            {
-                return _dynamicReconvergence;
-            }
-            set
-            {
-                _dynamicReconvergence = value;
-            }
-        }
+        private bool _initialized = false;
 
-        private LeiaSettings _settings = null;
-        [SerializeField] private bool _isDirty = false;
-        private bool detachCallbackForSceneChange;
-        // Serialize m_LightfieldMode directly on LeiaDisplay. Future-compatible
-        [SerializeField] private LightfieldMode m_DesiredLightfieldMode = LightfieldMode.On;
-        [SerializeField] private LightfieldMode m_ActualLightfieldMode = LightfieldMode.On;
-        private LightfieldMode m_PreviousLightfieldMode = LightfieldMode.On;
+        #region Private_Variables_LeiaDisplayNew
+        private bool CompletedFirstUpdate;
+        #endregion
+        #endregion
+        #region Public_Variables
 
-        private ILeiaState _leiaState;
-        private LeiaStateFactory _stateFactory = new LeiaStateFactory();
-        private LeiaDeviceFactory _deviceFactory = new LeiaDeviceFactory();
-        private ILeiaDevice _leiaDevice;
-
-        private const int CalibratingOffsetMin = -16;
-        private const int CalibratingOffsetMax = 16;
-
-#if UNITY_ANDROID && !UNITY_EDITOR
-        private float _disparityBackup;
-        private float _disparityAnimTime = 0;
-        private float _disparityAnimDirection = 0;
-        private const float BASELINE_ANIM_PEAK_TIME = 0.5f;
-#endif
-
-        /// <summary>
-        /// This enum defines the LeiaDevice's backlight on/off state,
-        /// which determines whether parallax pixel content gives depth cues to the viewer.
-        /// </summary>
-        public enum LightfieldMode : int
-        {
-            Off = 0,
-            On = 1
-
-            // do not assume that only values will ever be 0 and 1
-        };
-
-        /// <summary>
-        /// This enum defines the LeiaDevice's render technique,
-        /// which determines rendering order of Leia Views.
-        /// </summary>
-        public enum RenderTechnique
-        {
-            Default = 0,
-            Stereo = 1
-        };
-
-        public static string HPO { get { return "HPO"; } }
-        public static string TWO_D { get { return "2D"; } }
-        public static string THREE_D { get { return "3D"; } }
-
-        /// <summary>
-        /// Occurs when LeiaDisplay has leiaState or decorators changed.
-        /// </summary>
-        public event System.Action StateChanged = delegate { };
-
-        /// <summary>
-        /// Occurs when LeiaDisplay has leiaState or decorators changed.
-        /// Accepts parameters LightfieldMode previousState, LightfieldMode currentState
-        // Used to subscribe to specific backlight mode changes instead of explicitly checking LeiaDisplay values.
-        /// </summary>
-        public event System.Action<LeiaDisplay.LightfieldMode, LeiaDisplay.LightfieldMode> BacklightStateChanged = delegate { };
-
-        /// <summary>
-        /// Gets current leia device.
-        /// </summary>
-        public ILeiaDevice LeiaDevice
-        {
-            get
-            {
-                return _leiaDevice;
-            }
-        }
-
-        public bool IsDirty
-        {
-            get
-            {
-                return _isDirty;
-            }
-            set
-            {
-                // in edit mode when not playing, do not modify _isDirty. When user sets RenderMode from LeiaDisplayEditor :: ShowRenderMode, do not set _isDirty flag
-                // setter can only make IsDirty true. In Update(), after state regen _isDirty is assigned false
-                _isDirty = Application.isPlaying && (value || _isDirty);
-            }
-        }
-
-        /// <summary>
-        /// Gets current leiaState factory.
-        /// </summary>
-        public LeiaStateFactory StateFactory
-        {
-            get
-            {
-                return _stateFactory;
-            }
-        }
-
-        /// <summary>
-        /// Gets current leiaDevice factory
-        /// </summary>
-        public LeiaDeviceFactory DeviceFactory
-        {
-            get
-            {
-                return _deviceFactory;
-            }
-        }
-
-        /// <summary>
-        /// Gets settings object (where all LeiaDisplay settings aggregated)
-        /// </summary>
-        public LeiaSettings Settings
-        {
-            get
-            {
-                if (_settings == null)
-                {
-                    _settings = FindObjectOfType<LeiaSettings>();
-                    if (_settings != null)
-                    {
-                        _settings.gameObject.hideFlags = HideFlags.None;
-                    }
-
-                    if (_settings == null)
-                    {
-                        GameObject _settingsGO = new GameObject(LeiaSettings.GameObjectName);
-                        _settings = _settingsGO.AddComponent<LeiaSettings>();
-                    }
-                    _settings.gameObject.hideFlags = HideFlags.None; //HideFlags.HideInHierarchy;
-                }
-
-                return _settings;
-            }
-        }
-
-        /// <summary>
-        /// Allows user to enable/disable Parallax Auto Rotation animation on LeiaDisplay at runtime.
-        ///
-        /// To set the LeiaDisplay gameObject's initial value on scene load, use the LeiaDisplay gameObject's
-        /// Inspector to set the component's Parallax Auto Rotation.
-        ///
-        /// True: parallax rotation animations can be processed at runtime on device.
-        /// False: new parallax rotation animations will not be processed. (Active animation will still complete.)
-        /// </summary>
-        [System.Obsolete("Parallax auto-rotation not supported in recent Unity SDKs. This feature will be removed in a future Unity SDK release")]
-        public bool ParallaxAutoRotationAnimation
-        {
-            get
-            {
-                return Decorators.ParallaxAutoRotation;
-            }
-            set
-            {
-                LeiaStateDecorators decos = Decorators;
-                decos.ParallaxAutoRotation = value;
-                Settings.Decorators = decos;
-            }
-        }
-
-        /// <summary>
-        /// Gives access to AntiaAliasing setting, sets dirty flag when changed
-        /// </summary>
-        [System.Obsolete("Deprecated in LeiaLoft Unity SDK 0.6.20. Will be removed in 0.6.23. LeiaDisplay.AntiAliasing does not control LeiaView AA anymore. See IntermediateRenderTextureProperties.json")]
-        public int AntiAliasing
-        {
-            get
-            {
-                return Settings.AntiAliasing;
-            }
-            set
-            {
-                // this method intentionally left blank. Deprecated
-                ;
-            }
-        }
-
-        /// <summary>
-        /// Gives access to ProfileStubName setting, creates new factroy (based on new profile), sets dirty flag when changed
-        /// </summary>
-        public string ProfileStubName
-        {
-            get
-            {
-                return Settings.ProfileStubName;
-            }
-            set
-            {
-                Settings.ProfileStubName = value;
-                _isDirty = true;
-
-                if (Application.isPlaying)
-                {
-                    _leiaDevice.SetProfileStubName(value);
-                    _stateFactory.SetDisplayConfig(GetDisplayConfig());
-                }
-            }
-        }
-
-        /// <summary>
-        /// A getter method for checking if the LeiaDisplay desires the LightfieldMode to be on
-        /// </summary>
-        /// <returns>True if internal state machine thinks LeiaDisplay wants ActualLightfieldMode == LightfieldMode.On</returns>
-        public bool IsLightfieldModeActualOn()
-        {
-            return m_ActualLightfieldMode == LightfieldMode.On;
-        }
-
-        /// <summary>
-        /// This property provides a getter/setter for changing the LeiaDisplay's actual pixels and backlight from unlit traditional (Off) to lit parallax (On).
-        ///
-        /// Setting this property without modifying DesiredLightfieldMode causes the display's status to change, but does not save the user's desired value.
-        ///
-        /// This property should be expected to replace LeiaStateID.
-        /// </summary>
-        public LightfieldMode ActualLightfieldMode
-        {
-            get
-            {
-                return m_ActualLightfieldMode;
-            }
-            set
-            {
-                // this setter replaces the functionality of LeiaStateId
-                if (value == LightfieldMode.Off)
-                {
-                    Settings.LeiaStateId = TWO_D;
-                    m_ActualLightfieldMode = LightfieldMode.Off;
-                }
-                else if (value == LightfieldMode.On)
-                {
-                    Settings.LeiaStateId = HPO;
-                    m_ActualLightfieldMode = LightfieldMode.On;
-                }
-                RequestLeiaStateUpdate();
-            }
-        }
-
-        /// <summary>
-        /// Get the ActualLightfieldMode as if it were an int. 0 = off, 1 = on
-        /// </summary>
-        public int ActualLightfieldValue
-        {
-            get
-            {
-                return (int)m_ActualLightfieldMode;
-            }
-            set
-            {
-                ActualLightfieldMode = (LightfieldMode)value;
-            }
-        }
-
-        /// <summary>
-        /// Gets or sets the actual LeiaState of the display. Leia devices can be forced into 2D mode by
-        /// backlight shutoff (thermal), or
-        /// Android onscreen text.
-        /// </summary>
-        [Obsolete("Deprecated in 0.6.18. Use ActualLightfieldMode instead. Scheduled for removal in 0.6.20.")]
-        public string LeiaStateId
-        {
-            get
-            {
-                return Settings.LeiaStateId;
-            }
-            set
-            {
-                // LeiaStateID is now merely an adapter for LeiaDisplayActualLightfieldMode
-                if (value == TWO_D)
-                    ActualLightfieldMode = LightfieldMode.Off;
-                else if (value == THREE_D || value == HPO)
-                    ActualLightfieldMode = LightfieldMode.On;
-            }
-        }
-
-        /// <summary>
-        /// A getter method for checking if the LeiaDisplay desires the LightfieldMode to be on
-        /// </summary>
-        /// <returns>True if internal state machine thinks LeiaDisplay wants DesiredLightfieldMode == LightfieldMode.On</returns>
-        public bool IsLightfieldModeDesiredOn()
-        {
-            return m_DesiredLightfieldMode == LightfieldMode.On;
-        }
-
-        /// <summary>
-        /// This property provides a getter/setter for changing the LeiaDisplay's onscreen pixels and backlight to 2D / 3D.
-        ///
-        /// This property should be expected to replace DesiredLeiaStateID.
-        /// </summary>
+        public enum LightfieldMode { On, Off };
         public LightfieldMode DesiredLightfieldMode
         {
             get
             {
-                return m_DesiredLightfieldMode;
+                return _desiredLightfieldMode;
             }
             set
             {
-                // this setter replaces the functionality of DesiredLeiaStateID
-                m_PreviousLightfieldMode = m_DesiredLightfieldMode;
-                m_DesiredLightfieldMode = value;
-                if (value == LightfieldMode.Off)
+                if (_desiredLightfieldMode != value)
                 {
-                    Settings.DesiredLeiaStateID = TWO_D;
+                    _desiredLightfieldMode = value;
+                    Request2D3DUpdate();
                 }
-                else if (value == LightfieldMode.On)
+            }
+        }
+        [SerializeField]
+        public enum EditorPreviewMode { SideBySide, Interlaced };
+        public EditorPreviewMode DesiredPreviewMode;
+
+        public bool CameraShiftEnabled;
+        public event System.Action StateChanged = delegate { };
+
+        #region Public_Variables_LeiaDisplay_New
+
+        //Variables Developer can Modify
+        public float VirtualHeight = 10;
+
+        //[Range(.1f, 1)]
+        public float ParallaxFactor = 1.0f; //1 is realistic parallax
+
+        [Range(.1f, 1)]
+        public float DepthFactor = 1.0f; //1 is realistic depth
+
+        public bool DrawCameraBounds;
+
+        //Real Display Dimensions
+        [HideInInspector]
+        public float WidthMM = 266; //lumepad2
+        [HideInInspector]
+        public float HeightMM = 168;
+        [HideInInspector]
+        public float ViewingDistanceMM = 450; //this will be pulled from config
+
+        [Range(.1f, 20)]
+        public float MaxDisparity = 10f; //10% of screen width
+
+        public bool UseCameraClippingPlanes;
+
+        //Virtual Display Dimensions
+        [HideInInspector]
+        public float VirtualWidth
+        {
+            get
+            {
+                return VirtualHeight * (WidthMM / HeightMM);
+            }
+        }
+
+        //[HideInInspector]
+        public Camera DriverCamera;
+
+        public float MMToVirtual
+        {
+            get
+            {
+                return VirtualHeight / HeightMM;
+            }
+        }
+
+        public float VirtualToMM
+        {
+            get
+            {
+                return HeightMM / VirtualHeight;
+            }
+        }
+
+        public enum ControlMode { DisplayDriven, CameraDriven };
+        [HideInInspector]
+        public ControlMode mode;
+
+        public Head ViewersHead;
+        public Camera HeadCamera
+        {
+            get
+            {
+                return ViewersHead.headcamera;
+            }
+        }
+
+        public float ConvergenceDistance
+        {
+            get
+            {
+                if (mode == ControlMode.CameraDriven)
                 {
-                    Settings.DesiredLeiaStateID = HPO;
+                    return transform.localPosition.z;
                 }
                 else
                 {
-                    LogUtil.Log(LogLevel.Error, "Unsupported LightfieldMode {0} passed to DesiredDisplayHoloMode", value);
+                    return ViewersHead.transform.localPosition.z;
                 }
-
-                ActualLightfieldMode = value;
-            }
-        }
-
-        /// <summary>
-        /// Get the DesiredLightFieldMode as if it were an int. 0 = off, 1 = on
-        /// </summary>
-        public int DesiredLightfieldValue
-        {
-            get
-            {
-                return (int)DesiredLightfieldMode;
             }
             set
             {
-                DesiredLightfieldMode = (LightfieldMode)value;
-            }
-        }
-
-        /// <summary>
-        /// Specifies a desired LeiaState - "2D", or "HPO". Switches both screen content and device backlight status (if device has a backlight)
-        /// </summary>
-        [Obsolete("Deprecated in 0.6.18. Use DesiredLightfieldMode instead. Scheduled for removal in 0.6.20.")]
-        public string DesiredLeiaStateID
-        {
-            get
-            {
-                return Settings.DesiredLeiaStateID;
-            }
-            set
-            {
-                if (string.IsNullOrEmpty(value))
+                if (mode == ControlMode.CameraDriven)
                 {
-                    this.Warning("Provide a value when setting DesiredLeiaStateID");
-                    return;
+                    transform.localPosition = new Vector3(
+                    transform.localPosition.x,
+                    transform.localPosition.y,
+                    value
+                    );
                 }
-
-                // map lowercase to uppercase
-                // map {"3d", "3D"} to "HPO"
-                value = value.ToUpper(System.Globalization.CultureInfo.InvariantCulture);
-                if (value.Equals(THREE_D))
+                else
                 {
-                    value = HPO;
-                }
-
-                // DesiredLeiaStateID is now merely an adapter for DesiredLightfieldMode
-                if (value == TWO_D)
-                    DesiredLightfieldMode = LightfieldMode.Off;
-                else if (value == HPO)
-                    DesiredLightfieldMode = LightfieldMode.On;
-            }
-        }
-        public RenderTechnique DesiredRenderTechnique
-        {
-            get { return Decorators.RenderTechnique; }
-            set
-            {
-                LeiaStateDecorators decos = Decorators;
-                decos.RenderTechnique = value;
-                Decorators = decos;
-                RequestLeiaStateUpdate();
-            }
-        }
-
-        /// <summary>
-        /// Gets or sets the decorators, when changed - recreates LeiaStateFactory and applies leiaState to views
-        /// </summary>
-        /// <value>The decorators.</value>
-        public LeiaStateDecorators Decorators
-        {
-            get
-            {
-                return Settings.Decorators;
-            }
-            set
-            {
-                if (Settings.Decorators.Equals(value)) { return; }
-                Settings.Decorators = value;
-#if UNITY_EDITOR
-                // when a property on LeiaDisplay.LeiaSettings.Decorators is updated, force the UI for LeiaDisplay to update
-                UnityEditor.EditorUtility.SetDirty(this);
-#endif
-
-                if (Application.isPlaying)
-                {
-                    _stateFactory.SetDisplayConfig(GetDisplayConfig());
-                    UpdateLeiaState();
+                    /*
+                    ViewersHead.transform.localPosition = new Vector3(
+                    ViewersHead.transform.localPosition.x,
+                    ViewersHead.transform.localPosition.y,
+                    value
+                    );
+                    */
                 }
             }
         }
+        #endregion
+        #endregion
+        #region Unity_Functions
 
-        private void LogVersionAndGeneralInfo()
+        private void OnEnable()
         {
-            var version = Resources.Load<TextAsset>(VersionFileName);
-
-            if (version == null)
-            {
+            if (!Application.isPlaying)
                 return;
+
+            Debug.Log("LeiaDisplay::OnEnable()");
+            Debug.Log("LeiaDisplay::OnEnable::Checking is RenderTrackingDevice is attached");
+            RenderTrackingDevice.Instance = GetComponent<RenderTrackingDevice>();
+            if (RenderTrackingDevice.Instance == null)
+            {
+                Debug.Log("LeiaDisplay::OnEnable::RenderTrackingDevice is not attached. Adding a new RenderTrackingDevice component to LeiaDisplay");
+                RenderTrackingDevice.Instance = gameObject.AddComponent<RenderTrackingDevice>();
+            }
+            Debug.Log("LeiaDisplay::OnEnable::Calling RenderTrackingDevice.Instance.Initialize..");
+            RenderTrackingDevice.Instance.Initialize();
+            if (!_initialized)
+            {
+                DontDestroyOnLoad(gameObject);
+                Debug.Log("LeiaDisplay::OnEnable::Calling Update UpdateInitialViewOffsets()");
+                UpdateInitialViewOffsets();
+                _interlacedTexture = new RenderTexture(RenderTrackingDevice.Instance.GetDevicePanelResolution().x, RenderTrackingDevice.Instance.GetDevicePanelResolution().y, 0);
+                _interlacedTexture.Create();
+                _initialized = true;
             }
 
-            string logData = string.Format(
-                "LeiaLoft Unity SDK Version: {0}\nUnity version: {1}\nCurrent platform: {2}\nIs editor? {3}\n",
-                version.text, Application.unityVersion, Application.platform, Application.isEditor);
-
-            // log using LogUtil with Debug priority
-            this.Debug(logData);
-
-#if !UNITY_EDITOR
-            // in builds which have Debug.unityLogger.logEnabled and didn't strip out log commands, also log through Unity's built-in logger
-            Debug.Log(logData);
+#if UNITY_EDITOR
+            EnsureEditorPreivewMaterialInitialized();
 #endif
+            Request2D3DUpdate();
         }
 
-        public int[] CalibrationOffset
-        {
-            get
-            {
-                return _leiaDevice.CalibrationOffset;
-            }
-            set
-            {
-                if (Application.isPlaying)
-                {
-                    value[1] = Mathf.Clamp(value[1], CalibratingOffsetMin, CalibratingOffsetMax);
-                    value[0] = Mathf.Clamp(value[0], CalibratingOffsetMin, CalibratingOffsetMax);
-                    _leiaDevice.GetDisplayConfig().AlignmentOffset = new XyPair<float>(value[0], value[1]);
-                    _isDirty = true;
-                }
-            }
-        }
 
         private void OnResume()
         {
-            if (_leiaDevice != null && _leiaDevice.GetBacklightMode() == 3)
+#if !UNITY_EDITOR
+            if(DesiredLightfieldMode == LightfieldMode.On)
             {
-                // on resume, if the LeiaLights DisplaySDK state machine thinks this app was in 3D mode on last frame
-                // then _getBacklightMode should be 3. Store in the latest3DFrame flag.
-                // In BacklightModeChanged we will discard BacklightModeChanged(2D) callbacks which occur recently after
-                // OnResume {GetBacklightMode == 3}
-                latest3DFrame = Time.frameCount;
+                Set2D3DMode(3);
             }
-
-            // on return to app, if desired state is HPO and forced state is not HPO,
-            // we are allowed to return to HPO
-            if (DesiredLeiaStateID.Equals(HPO) && !LeiaStateId.Equals(HPO))
-            {
-                DesiredLeiaStateID = HPO;
-            }
-            else
-            {
-                _isDirty = true;
-            }
+#endif
         }
 
         private void OnPause()
         {
-            // catch a case with DisplaySDK 7.1 where Hydrogen apps which were minimized using moveTaskToBack would not disengage backlight
 #if !UNITY_EDITOR
-            if (_leiaDevice != null && _leiaDevice.GetBacklightMode() != 2)
+            if(Get2D3DMode() != 2)
             {
-                _leiaDevice.SetBacklightMode(2);
+                Set2D3DMode(2);
             }
 #endif
         }
 
-        /// <summary>
-        /// Called when a standalone platform changes focus ("active window") to this application
-        /// </summary>
-        /// <param name="focus">True if focusing on app, false if dropping focus on app</param>
         private void OnApplicationFocus(bool focus)
         {
-            // check flag, only set if not already set; save double work in case where OnApplicationFocus and OnApplicationPause both trigger
-            if (focus && !_isDirty)
+            if (focus)
             {
                 OnResume();
             }
@@ -569,840 +240,605 @@ namespace LeiaLoft
 
         void OnApplicationPause(bool pauseStatus)
         {
-            if (!pauseStatus)
-            {
-                OnResume();
-            }
-            else
-            {
-                OnPause();
-            }
         }
 
-        private void OnEnable()
-        {
-            if (!FindObjectOfType<BacklightEnforcer>()) //!gameObject.GetComponent<BacklightEnforcer>() && 
-            {
-                GameObject backlightEnforcer = new GameObject("BacklightEnforcer");
-                backlightEnforcer.AddComponent<BacklightEnforcer>();
-            }
-            LogVersionAndGeneralInfo();
-            this.Debug("OnEnable");
-            AbstractLeiaDevice device;
-#if LEIALOFT_CONFIG_OVERRIDE
-            device = new OverrideLeiaDevice(OverrideLeiaDevice.DefaultOverrideConfigFilename);
-#elif UNITY_ANDROID && !UNITY_EDITOR
-            device = new AndroidLeiaDevice(ProfileStubName);
-            /// <remove_from_public>
-#elif UNITY_STANDALONE_LINUX && !UNITY_EDITOR
-            device = new LinuxLeiaDevice(ProfileStubName);
-#elif UNITY_STANDALONE_WIN && !UNITY_EDITOR
-            device = new WindowsLeiaDevice(ProfileStubName);
-            /// </remove_from_public>
-#else
-            device = new OfflineEmulationLeiaDevice(ProfileStubName);
-#endif
-            _deviceFactory.RegisterLeiaDevice(device);
-            UpdateDevice();
-            SceneManager.activeSceneChanged += onSceneChange;
-
-            if (tracker == null)
-            {
-                tracker = FindObjectOfType<BlinkTrackingUnityPlugin>();
-            }
-        }
-
-        /// <summary>
-        /// Gets new device from deviceFactory (providing profile stub name in case if device not available).
-        /// Gets profile from new device, sends it to leiaStateFactory.
-        /// Gets default LeiaStateId if LeiaStateId is empty.
-        /// Applies lState.
-        /// </summary>
-        public void UpdateDevice()
-        {
-            this.Debug("UpdateDevice");
-            _leiaDevice = _deviceFactory.GetDevice(ProfileStubName);
-            _stateFactory.SetDisplayConfig(GetDisplayConfig());
-
-            RequestLeiaStateUpdate();
-        }
-
-        private void OnDisable()
-        {
-            this.Debug("OnDisable");
-            if (_leiaState != null)
-            {
-                _leiaState.Release();
-            }
-
-            // set flag for OnSceneChange callback to be detached after OnSceneChange is run
-            detachCallbackForSceneChange = true;
-        }
-
-        /// <summary>
-        /// On App quit, sets backlight off.
-        /// Handles case where this scene is being deloaded, and no new scene is being loaded.
-        /// </summary>
         private void OnApplicationQuit()
         {
-            _leiaDevice.SetBacklightMode(2);
+            Set2D3DMode(2);
         }
-
-        public void QuitApp()
+        #region Unity_Functions_LeiaDisplayNew
+        public void Update()
         {
-            _leiaDevice.SetBacklightMode(2);
-        }
-
-#if UNITY_ANDROID && !UNITY_EDITOR
-        /// <summary>
-        /// If device is rotated, animates disparity scaling to 0, sets proper parallax orientation
-        /// and then animates disparity scaling back
-        /// </summary>
-        private void ProcessParallaxRotation()
-        {
-            if (Decorators.ParallaxAutoRotation &&
-                (Decorators.ShouldParallaxBePortrait !=
-                 (Input.deviceOrientation == DeviceOrientation.Portrait ||
-                  Input.deviceOrientation == DeviceOrientation.PortraitUpsideDown)) &&
-                _disparityAnimDirection == 0)
+            if (Application.isPlaying)
             {
-                _disparityAnimDirection = 1;
-                _disparityBackup = LeiaCamera.Instance.BaselineScaling;
-                _disparityAnimTime = Time.realtimeSinceStartup;
+                UpdateViews(); // Joe: questioning the need for this here
             }
 
-            float timeDifference = Time.realtimeSinceStartup - _disparityAnimTime + 0.001f;
-
-            if (_disparityAnimDirection == 1)
+            if (!CompletedFirstUpdate)
             {
-                if (timeDifference < BASELINE_ANIM_PEAK_TIME)
+                OnComponentAddedToGameObject();
+                CompletedFirstUpdate = true;
+                return;
+            }
+
+            if (UseCameraClippingPlanes)
+            {
+                if (DriverCamera != null)
                 {
-                    LeiaCamera.Instance.BaselineScaling = _disparityBackup * (1.0f - timeDifference/BASELINE_ANIM_PEAK_TIME);
-                }
-                else
-                {
-                    _disparityAnimTime = Time.realtimeSinceStartup;
-                    _disparityAnimDirection = -1;
-                    var tmpDecorator = Decorators;
-                    tmpDecorator.ShouldParallaxBePortrait =
-                    (Input.deviceOrientation == DeviceOrientation.Portrait ||
-                    Input.deviceOrientation == DeviceOrientation.PortraitUpsideDown);
-                    Decorators = tmpDecorator;
-                    _isDirty = true;
-                }
-            }
-            else if (_disparityAnimDirection == -1)
-            {
-                if (timeDifference < BASELINE_ANIM_PEAK_TIME)
-                {
-                    LeiaCamera.Instance.BaselineScaling = _disparityBackup * (timeDifference/BASELINE_ANIM_PEAK_TIME);
-                }
-                else
-                {
-                    LeiaCamera.Instance.BaselineScaling = _disparityBackup;
-                    _disparityAnimDirection = 0;
-                }
-            }
-        }
-#endif
-
-        [SerializeField] private bool _isRainbow = false;
-        public bool isRainbow
-        {
-            get
-            {
-                return _isRainbow;
-            }
-        }
-
-        /// <summary>
-        /// Render in Play mode, check isDirty flag and (re)Set leiaState
-        /// </summary>
-        private void Update()
-        {
-            if ((Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl)) && Input.GetKeyDown(KeyCode.R))
-            {
-                _isRainbow = !_isRainbow;
-            }
-
-            if ((Input.GetKeyDown(KeyCode.S)))
-            {
-                _blackViews = !_blackViews;
-            }
-
-            if ((Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl)) && Input.GetKeyDown(KeyCode.T))
-            {
-                // T = show tiles
-                var decos = Decorators;
-                decos.ShowTiles = !decos.ShowTiles;
-                this.Decorators = decos;
-            }
-
-            if (_leiaDevice != null && _leiaDevice.HasDeviceOrientationChangedSinceLastQuery())
-            {
-                _isDirty = true;
-            }
-
-#if UNITY_ANDROID && !UNITY_EDITOR
-            ProcessParallaxRotation();
-#else
-#endif
-
-            if (_isDirty)
-            {
-                _isDirty = false;
-                DisplayConfig displayConfig = GetDisplayConfig();
-                // inside GetDisplayConfig, calculate UserOrientationIsLandscape
-                _stateFactory.SetDisplayConfig(displayConfig);
-                if (!BacklightEnforcer.appQuitting)
-                {
-                    RequestLeiaStateUpdate();
-                }
-            }
-        }
-
-        // hopefully later have an interface which any eye tracking can fulfill. Should deliver IEnumerable<Faces> with Faces having {left xyz and direction, right xyz and direction}
-        [SerializeField] public BlinkTrackingUnityPlugin tracker;
-
-        public float faceX;
-        public float faceY;
-        public float faceZ;
-        /// <summary>
-        /// Use leiaState to render final picture
-        /// </summary>
-        public void RenderImage(LeiaCamera camera)
-        {
-            DisplayConfig displayConfig = GetDisplayConfig();
-
-            if (dynamicReconvergence && tracker != null)
-            {
-                tracker.UpdateFacePosition();
-                if (tracker.NumFaces > 0)
-                {
-                    viewerPosition = new Vector3(tracker.predictedFaceX, tracker.predictedFaceY, tracker.predictedFaceZ);
-                    viewerPositionNonPredicted = new Vector3(tracker.faceX, tracker.faceY, tracker.faceZ);
-
-                    faceX = viewerPosition.x;
-                    faceY = viewerPosition.y;
-                    faceZ = viewerPosition.z;
+                    ViewersHead.headcamera.nearClipPlane = this.DriverCamera.nearClipPlane;
+                    ViewersHead.headcamera.farClipPlane = this.DriverCamera.farClipPlane;
                 }
             }
             else
             {
-                faceX = 0;
-                faceY = 0;
-                faceZ = displayConfig.ConvergenceDistance;
-                viewerPosition = new Vector3(0, 0, displayConfig.ConvergenceDistance);
+                ViewersHead.headcamera.nearClipPlane = 1f / ((5f / 4f) * ParallaxFactor * VirtualToMM * (1f / ViewersHead.HeadPositionMM.z + 1f / 1000f));
+                ViewersHead.headcamera.farClipPlane = 1f / ((5f / 6f) * ParallaxFactor * VirtualToMM * (1f / ViewersHead.HeadPositionMM.z - 1f / 1000f));
+                ViewersHead.Update();
             }
 
-            if (enabled)
+            if (mode == ControlMode.CameraDriven)
             {
-                _leiaState.DrawImage(camera, Decorators);
+                UpdateVirtualDisplayFromCamera();
             }
-        }
-
-        /// <summary>
-        /// When in 2D, forces HPO then back to 2D
-        /// When in HPO, forces 2D then back to HPO
-        ///
-        /// Skips backlight switching.
-        ///
-        /// This method resolves a specific issue with orthographic / perspective cameras. External users should use
-        /// DesiredLeiaStateId = ...
-        /// </summary>
-        public void ForceLeiaStateUpdate()
-        {
-            string init = LeiaStateId;
-            string conj = (LeiaStateId == HPO ? TWO_D : HPO);
-
-            Settings.LeiaStateId = conj;
-            _leiaState = _stateFactory.GetState(LeiaStateId);
-            UpdateLeiaState();
-
-            Settings.LeiaStateId = init;
-            _leiaState = _stateFactory.GetState(LeiaStateId);
-            UpdateLeiaState();
-        }
-
-        /// <summary>
-        /// Requests new state from current LeiaStateFactory, switches backlight,
-        /// updates texture. UpdateLeiaState triggers StateChanged() actions.
-        /// </summary>
-        private void RequestLeiaStateUpdate()
-        {
-            if (BacklightEnforcer.appQuitting)
+            else
             {
-                return;
-            }
+                //Display centric
 
-            if (!Application.isPlaying)
-            {
-                return;
-            }
-            if (_leiaState != null)
-            {
-                _leiaState.Release();
-            }
-
-            // set interlacing state based on LeiaStateId
-            _leiaState = _stateFactory.GetState(LeiaStateId);
-
-            // Set backlight state based on LeiaStateId
-            /*
-            if (_leiaDevice != null && _leiaDevice.GetBacklightMode() == 3 && !LeiaStateId.Equals(HPO))
-            {
-                _leiaDevice.SetBacklightMode(_leiaState.GetBacklightMode());
-            }
-            if (_leiaDevice != null && _leiaDevice.GetBacklightMode() != 3 && LeiaStateId.Equals(HPO))
-            {
-                _leiaDevice.SetBacklightMode(_leiaState.GetBacklightMode());
-            }
-            */
-            if (_leiaDevice != null)
-            {
-                _leiaDevice.SetBacklightMode(3);
-            }
-
-            if (_leiaDevice.GetBacklightMode() == 3)
-            {
-                latest3DFrame = Time.frameCount;
-            }
-
-            // private member RequestLeiaStateUpdate() calls public member UpdateLeiaState
-            // UpdateLeiaState is called by LeiaConfigSettingsUI
-            UpdateLeiaState();
-        }
-
-        public void UpdateLeiaState()
-        {
-            // this overwrites fields of displayPropertyData. this data represents display physical params like BLU stretch
-
-            _leiaState.UpdateState(Decorators, LeiaDevice);
-
-            // if not dirty, and state matches backlight, then we are ready to trigger StateChanged callback
-            bool matchedState = !_isDirty &&
-                ((LeiaStateId == HPO && _leiaState.GetBacklightMode() == 3) ||
-                (LeiaStateId != HPO && _leiaState.GetBacklightMode() != 3));
-
-            if (matchedState && StateChanged != null)
-            {
-                StateChanged();
-                BacklightStateChanged(m_PreviousLightfieldMode, ActualLightfieldMode);
+                UpdateCameraFromVirtualDisplay();
             }
         }
-
-        /// <summary>
-        /// This method is called by the LeiaLights Display SDK when the device's backlight engages or disengages. Do not call this method.
-        ///
-        /// Examples of reasons for LeiaLights DisplaySDK to call this method:
-        ///     thermal callback caused backlight to turn off
-        ///     app reopened, and LeiaLights DisplaySDK set backlight back to last known state that it thought the app was in
-        ///     user dragged down Android status bar on their device
-        /// </summary>
-        /// <param name="mode">2D if firmware sets backlight off, 3D if firmware sets backlight on</param>
-        private int latest3DFrame = -1;
-        private void BacklightModeChanged(string mode)
+        private void OnDrawGizmos()
         {
-            if (string.IsNullOrEmpty(mode) || !(mode == THREE_D || mode == TWO_D))
-            {
-                LogUtil.Log(LogLevel.Warning, "Symbol {0} is not a valid backlight state", mode);
-                return;
-            }
-            mode = mode.ToUpper(System.Globalization.CultureInfo.InvariantCulture);
-
-            if (mode == THREE_D && DesiredLeiaStateID != HPO)
-            {
-                DesiredLeiaStateID = HPO;
-            }
-            else if (mode == TWO_D && LeiaStateId == HPO && latest3DFrame <= Time.frameCount - 1)
-            {
-                // suppress if we recently set to 3D.
-
-                // if not recently set to 3D, then we can switch content to 2D to match device's unlit state
-                LeiaStateId = TWO_D;
-            }
-        }
-
-        /// <summary>
-        /// Newer versions of LeiaLights SDK / DisplaySDK AAR 7.x call
-        /// LeiaDisplay :: onBacklightModeChanged instead of
-        /// LeiaDisplay :: BacklightModeChanged. These calls can be forwarded to BacklightModeChanged
-        /// </summary>
-        /// <param name="mode">2D if firmware has turned backlight off, 3D if firmware has turned backlight on</param>
-        void onBacklightModeChanged(string mode)
-        {
-            BacklightModeChanged(mode);
-        }
-
-        public DisplayConfig displayConfig;
-
-        public void ReloadDisplayConfig()
-        {
-            displayConfig = null;
-            GetDisplayConfig();
-        }
-
-        public DisplayConfig GetDisplayConfig()
-        {
-            if (displayConfig != null)
-            {
-                return displayConfig;
-            }
-#if UNITY_EDITOR
-            displayConfig = _deviceFactory.GetDevice(ProfileStubName).GetDisplayConfig();
-            displayConfig.UserOrientationIsLandscape = _leiaDevice == null ? true : _leiaDevice.IsScreenOrientationLandscape();
-
-            ValidateConfig(displayConfig);
-            return displayConfig;
-#else
-            if (_leiaDevice != null)
-            {
-                displayConfig = _leiaDevice.GetDisplayConfig();
-                displayConfig.UserOrientationIsLandscape = _leiaDevice == null ? true : _leiaDevice.IsScreenOrientationLandscape();
-            }
-#endif
-            if (displayConfig == null)
-            {
-                displayConfig = new DisplayConfig();
-                ValidateConfig(displayConfig);
-                return displayConfig;
-            }
-
-            ValidateConfig(displayConfig);
-            return displayConfig;
-        }
-
-        void ValidateConfig(DisplayConfig config)
-        {
-            if (config.PanelResolution.y == 0)
-            {
-                Debug.LogError("config.PanelResolution.y = 0. This should never happen. Check config file.");
-            }
-
-            if (config.DotPitchInMm.y == 0)
-            {
-                Debug.LogError("config.DotPitchInMm.y = 0. This should never happen. Check config file.");
-            }
-        }
-
-        public bool IsConnected()
-        {
-            return LeiaDevice.IsConnected();
-        }
-
-        /// <summary>
-        /// Updates the views by applying leiaState UpdateViews method and sets renderTextures from texturePool.
-        /// </summary>
-        public void UpdateViews(LeiaCamera camera)
-        {
-            if (enabled)
-            {
-                this.Debug("UpdateViews");
-                _leiaState.UpdateViews(camera);
-            }
-        }
-
-        private void onSceneChange(Scene scene, Scene scene2)
-        {
-            bool containsLeia;
-
-            GameObject[] gameObjects = scene2.GetRootGameObjects();
-            LeiaDisplay leiaDisp = null;
-            for (int i = 0; i < gameObjects.Length; i++)
-            {
-                leiaDisp = gameObjects[i].GetComponentInChildren<LeiaDisplay>();
-                if (leiaDisp != null) { break; }
-            }
-            containsLeia = (leiaDisp != null);
-
-            if (!containsLeia)
-            {
-                LeiaDevice.SetBacklightMode(2, 1);
-            }
-            if (detachCallbackForSceneChange)
-            {
-                SceneManager.activeSceneChanged -= onSceneChange;
-            }
-
-            if (detachCallbackForSceneChange)
-            {
-                SceneManager.activeSceneChanged -= onSceneChange;
-            }
-
-        }
-#pragma warning restore CS0618 // Type or member is obsolete
-
-        #region dynamic_interlacing_display
-
-        public Vector3 viewerXYZ
-        {
-            get
-            {
-                return viewerPosition;
-            }
-        }
-
-        public float displayConvergenceDistance
-        {
-            get
-            {
-                return this.GetDisplayConfig().ConvergenceDistance;
-            }
-        }
-
-        public float theta
-        {
-            get
-            {
-                return this.GetDisplayConfig().theta;
-                //return displayPropertyData.display.theta;
-            }
-        }
-
-        public float pixelPitch
-        {
-            get
-            {
-                return this.GetDisplayConfig().DotPitchInMm[0];
-            }
-        }
-
-        public float n
-        {
-            get
-            {
-                return this.GetDisplayConfig().n;
-            }
-        }
-
-        public float s
-        {
-            get
-            {
-                return this.GetDisplayConfig().s / (this.GetDisplayConfig().PanelResolution.x * this.GetDisplayConfig().p_over_du);
-            }
-        }
-
-        public float p_over_du
-        {
-            get
-            {
-                return this.GetDisplayConfig().p_over_du;
-            }
-        }
-
-        public float d_over_n
-        {
-            get
-            {
-                return this.GetDisplayConfig().d_over_n;
-            }
-        }
-
-        [SerializeField] public Vector3 viewerPositionNonPredicted = new Vector3(0, 0, 535.964f);
-        [SerializeField] public Vector3 viewerPosition = new Vector3(0, 0, 535.964f);
-
-        // fields updated in UpdateLeiaState()
-        /*
-        [SerializeField]
-        public displayPropertyDataSchema displayPropertyData = new displayPropertyDataSchema()
-        {
-            display = new displayPhysicalDataSchema();
-            display.pixelPitch = this.GetDisplayConfig().DotPitchInMm[0];
-            display.n = this.GetDisplayConfig().ActCoefficient.y[0]/1000.0f;
-            display.s = this.GetDisplayConfig().UserDotPitchInMM[0] / (3f * this.GetDisplayConfig().UserViewResolution.x);
-            display.d_over_n = s * this.GetDisplayConfig().ConvergenceDistance;
-        };*/
-
-        [SerializeField] ToggleScaleTranslate stretchTS = new ToggleScaleTranslate(1, 0, ToggleScaleTranslate.ModificationMode.ON);
-        public float getStretch()
-        {
-            return stretchTS * getStretch(0, viewerXYZ.z);
-        }
-
-        public float getStretch(int faceIndex, float z)
-        {
-            // see https://github.com/leaiss/orbital_player/blob/77ef952176ea204dd551499a3a3fae9cd6427a44/orbitalplayer/orbitalplayer.cpp#L2469
-            // based on https://leia3d.atlassian.net/wiki/spaces/LIT/pages/2930245711/Independent+variables+to+describe+view+geometry, s is stretch coefficient
-            // there is no "local_s"; there is display s, which is already s = pixelPitch / (3.0*ViewboxSize[0])
-            float D = d_over_n / s;
-            float calculated_stretch = (d_over_n) / z;
-            float orig_stretch = (d_over_n) / D;
-            return 1.0f - (orig_stretch - calculated_stretch);
-        }
-
-        // see calling code for getStretch at https://github.com/leaiss/orbital_player/blob/1045d08db22acc8890fa4742a9de5ad168d94b07/orbitalplayer/orbitalplayer.cpp#L2467
-
-        // needs to be moved to HLSL https://github.com/leaiss/orbital_player/blob/67c329119be68679efe20754b1a7e2a2384f383b/orbitalplayer/shaders/prediction_shader.glsl#L33
-
-        [SerializeField] private bool correctViewIndexForViewerPosition = true;
-        [SerializeField] private KeyCode ctrlToggleCorrection = KeyCode.U;
-
-        // defalt scale 0.12, transation 0.0. used to transform the result of getN
-        [SerializeField] public ToggleScaleTranslate viewXYOffsetTS = new ToggleScaleTranslate(0.12f, 0.0f, ToggleScaleTranslate.ModificationMode.ON);
-
-        public bool round;
-
-        public void SetRound(bool round)
-        {
-            this.round = round;
-            Debug.Log("round = " + round);
-        }
-
-        public bool roundViewPeel = true;
-
-        public void SetRoundViewPeel(bool roundViewPeel)
-        {
-            this.roundViewPeel = roundViewPeel;
-        }
-
-        public float numViews; //FOR DEBUGGING DELETE THIS LATER
-        public float No; //FOR DEBUGGING DELETE THIS LATER
-
-        float _displayOffset;
-        public float displayOffset
-        {
-            get
-            {
-                if (_displayOffset == 0)
-                {
-                    numViews = GetDisplayConfig().NumViews[0];
-
-                    No = GetDisplayConfig().CenterViewNumber;
-                    if (round)
-                    {
-                        _displayOffset = Mathf.Round((GetDisplayConfig().NumViews[0] - 1f) / 2f - No);
-                    }
-                    else
-                    {
-                        _displayOffset = (GetDisplayConfig().NumViews[0] - 1f) / 2f - No;
-                    }
-                }
-                return _displayOffset;
-            }
-        }
-        EyeTrackingCameraShift _shifter;
-        public EyeTrackingCameraShift shifter
-        {
-            get
-            {
-                if (_shifter == null)
-                {
-                    _shifter = FindObjectOfType<EyeTrackingCameraShift>();
-                }
-                return _shifter;
-            }
-        }
-
-        /// <summary>
-        /// Slides views around by a continuous amount depending upon viewer position.
-        ///
-        /// Might need a scale correction.
-        ///
-        /// Later user should be able to get ith view offset based upon ith face position
-        /// </summary>
-        /// <returns></returns>
-        // see https://github.com/leaiss/orbital_player/blob/9d6e6bd71f6c3e0236f9c64f164449258bd8f685/orbitalplayer/orbitalplayer.cpp#L3994
-        
-        float getPeelOffset()
-        {
-            if (tracker != null && !tracker.enabled)
-            {
-                return 0;
-            }
-
-            float No = this.GetDisplayConfig().CenterViewNumber;
-            float PeelOffset = (getN(viewerPosition.x, viewerPosition.y, viewerPosition.z, 0f, 0f)
-                - No);
-
-            if (Display.displays.Length > 1) //Hacky fix for multiple displays view offset issue
-            {
-                PeelOffset -= 1;
-            }
-            return PeelOffset;
-        }
-
-        public float getPeelOffsetForShader()
-        {
-            return getPeelOffset(); // + displayOffset;
-        }
-
-        public float getLastPeelOffsetForShader()
-        {
-            float returnValue = lastOffsetForShader;
-            lastOffsetForShader = getPeelOffsetForShader();
-            return returnValue;
-        }
-
-        float lastOffsetForShader;
-
-        float scale = .01f;
-
-        public float cameraShiftOffsetY;
-
-        public void SetCameraShiftOffsetY(float newOffsetY)
-        {
-            cameraShiftOffsetY = newOffsetY;
-        }
-
-        public bool cameraDriven;
-        public bool enableZCameraShift;
-
-        public Vector3 getPeelOffsetForCameraShift()
-        {
-            if (this.viewPeeling)
-            {
-                return new Vector3(
-                    getPeelOffset() * slidingScale,
-                    0,
+            Vector3 TopLeftCorner = new Vector3(
+                    VirtualWidth / 2f,
+                    VirtualHeight / 2f,
                     0
-                );
-            }
-            DisplayConfig config = this.GetDisplayConfig();
+                    );
 
-            float realDisplayHeight = config.PanelResolution.y * config.DotPitchInMm.y;
-            float virtualDisplayHeight = Screen.height * scale;
+            Vector3 TopRightCorner = new Vector3(
+                    -VirtualWidth / 2f,
+                    VirtualHeight / 2f,
+                    0
+                    );
 
-            float hv_over_h = virtualDisplayHeight / realDisplayHeight;
+            Vector3 BottomLeftCorner = new Vector3(
+                    VirtualWidth / 2f,
+                    -VirtualHeight / 2f,
+                    0
+                    );
 
-            float zoffset = 0;
+            Vector3 BottomRightCorner = new Vector3(
+                    -VirtualWidth / 2f,
+                    -VirtualHeight / 2f,
+                    0
+                    );
 
-            if (cameraDriven)
+            TopLeftCorner = transform.position + transform.rotation * TopLeftCorner;
+            TopRightCorner = transform.position + transform.rotation * TopRightCorner;
+            BottomLeftCorner = transform.position + transform.rotation * BottomLeftCorner;
+            BottomRightCorner = transform.position + transform.rotation * BottomRightCorner;
+            if (enabled)
             {
-                zoffset = viewerPositionNonPredicted.z;
+                Gizmos.DrawLine(TopRightCorner, TopLeftCorner);
+                Gizmos.DrawLine(BottomLeftCorner, BottomRightCorner);
+                Gizmos.DrawLine(TopRightCorner, BottomRightCorner);
+                Gizmos.DrawLine(TopLeftCorner, BottomLeftCorner);
             }
-            return new Vector3(
-                viewerPositionNonPredicted.x * hv_over_h * slidingScale,
-                viewerPositionNonPredicted.y * hv_over_h * slidingScale + cameraShiftOffsetY,
-                -zoffset
-                );
         }
-        
 
-        /// <summary>
-        /// My suspicion: this calculates a view index offset from viewer position, in "view units". IE every 1-unit-increase in getN's return value is +1 view index, 
-        /// </summary>
-        /// <returns></returns>
-        /// original https://github.com/leaiss/orbital_player/blob/98568387e62477a904fac87ad490a955b5e8dad1/orbitalplayer/orbitalplayer.cpp#L3975
-        public float getN(float x, float y, float z, float x0, float y0)
+        private void OnDestroy()
         {
-            float pixelPitch = this.pixelPitch;
-            float fullWidth = GetDisplayConfig().PanelResolution.x;
-            float fullHeight = GetDisplayConfig().PanelResolution.y;
+            if (ViewersHead != null)
+            {
+                DestroyImmediate(ViewersHead.gameObject);
+            }
+        }
+        #endregion
+        #endregion
+        #region Init_Functions
+        #region Init_Functions_LeiaDisplayNew
 
-            //float theta_n = 0; //displayPropertyData.display.theta;
-            float stretch_n = this.s;
-            float theta_n = this.theta / (fullHeight * 3.0f);
-
-            //float stretch_n = displayPropertyData.display.s / (fullWidth * 3.0f);
-            float No = GetDisplayConfig().CenterViewNumber; // displayPropertyData.display.offsetX; // CenterView !!!!!
-                                                            // float theta_c = displayPropertyData.display.theta;
-
-            //float du = this.pixelPitch / 3.0f; // 3.0f probably could be interlacing_matrix[12] * viewCount / panelResolution.x
-            //float dv = GetDisplayConfig().InterlacingMatrix[14] > 0.0f ? +pixelPitch : -pixelPitch; // "boolean isPositiveSlant" is probably better represented as a float interlacing_matrix[13] * viewCount / panelResolution.y. currently we assume slant is not 0 and has no scale
-
-            float du = pixelPitch / GetDisplayConfig().p_over_du;
-            float dv = pixelPitch / GetDisplayConfig().p_over_dv;
-
-            // note: sign changed on main for this calc
-
-            // assume there are no issues with angular wrap-around of operations like angle - angle
-            float dx = s * x0 + (Mathf.Cos(theta_n) - 1.0f) * x0 - Mathf.Sin(theta_n) * y0;
-            float dy = s * y0 + (Mathf.Cos(theta_n) - 1.0f) * y0 + Mathf.Cos(theta_n) * x0;
-
-            float n = this.n;
-            float denom = Mathf.Sqrt(z * z + (1 - 1.0f / (n * n)) * ((x - x0) * (x - x0) + (y - y0) * (y - y0)));
-
-            float u = dx + d_over_n * (x - x0) / denom;
-            float v = dy + d_over_n * (y - y0) / denom;
-
-            float N = No + u / du + v / dv;
-            /*
-            Debug.LogFormat(
-                "pixelPitch = {0}\n" +
-                "fullWidth = {1}\n" +
-                "fullHeight = {2}\n" +
-                "theta_n = {3}\n" +
-                "stretch_n = {4}\n" +
-                "No = {5}\n" +
-                "du = {6}\n" +
-                "dv = {7}\n" +
-                "n = {8}\n" +
-                "d_over_n = {9}\n" +
-                "N = {10}\n" +
-                "u = {11}\n" +
-                "v = {12}\n" +
-                "dx = {13}\n" +
-                "dy = {14}\n" +
-                "cameraCenterX = {15}" +
-                "cameraCenterY = {16}" +
-                "cameraCenterZ = {17}" +
-                "cameraThetaX = {18}" +
-                "cameraThetaY = {19}" +
-                "cameraThetaZ = {20}" ,
-                pixelPitch,
-                fullWidth,
-                fullHeight,
-                theta_n,
-                stretch_n,
-                No,
-                du,
-                dv,
-                n,
-                d_over_n,
-                N,
-                u,
-                v,
-                dx,
-                dy,
-                GetDisplayConfig().cameraCenterX,
-                GetDisplayConfig().cameraCenterY,
-                GetDisplayConfig().cameraCenterZ,
-                GetDisplayConfig().cameraThetaX,
-                GetDisplayConfig().cameraThetaY,
-                GetDisplayConfig().cameraThetaZ
+        public void InitLeiaDisplay(List<Vector2> ViewConfig)
+        {
+            GameObject newHeadGameObject = new GameObject("Head (Camera For 2D)");
+            newHeadGameObject.transform.parent = transform;
+            newHeadGameObject.transform.localPosition = new Vector3(
+                0,
+                0,
+                ViewingDistanceMM * VirtualHeight / (HeightMM * ParallaxFactor)
                 );
-            */
-            return N;
+            if (mode == ControlMode.CameraDriven)
+            {
+                UpdateVirtualDisplayFromCamera();
+            }
+            ViewersHead = newHeadGameObject.AddComponent<Head>();
+            ViewersHead.InitHead(ViewConfig, this);
+        }
+        void OnComponentAddedToGameObject()
+        {
+            DriverCamera = GetComponent<Camera>();
+            Camera camParent = null;
+            if (transform.parent != null)
+            {
+                camParent = transform.parent.GetComponent<Camera>();
+            }
+
+            if (DriverCamera != null) //If LeiaDisplay component was just added to a camera game object do this
+            {
+                Debug.Log("Gets here");
+                mode = ControlMode.CameraDriven;
+                ParallaxFactor = (ViewingDistanceMM * VirtualHeight) / (HeightMM * transform.localPosition.z);
+                GameObject leiaDisplayGameObject = new GameObject("LeiaDisplay");
+                leiaDisplayGameObject.transform.parent = transform;
+                LeiaDisplay newLeiaDisplay = leiaDisplayGameObject.AddComponent<LeiaDisplay>();
+                newLeiaDisplay.UseCameraClippingPlanes = true;
+                leiaDisplayGameObject.transform.localPosition = new Vector3(
+                    0,
+                    0,
+                    2f / (1f / DriverCamera.nearClipPlane + 1f / DriverCamera.farClipPlane)
+                );
+
+                DestroyImmediate(this);
+            }
+            else
+            {
+                if (camParent != null)
+                {
+                    DriverCamera = camParent;
+                    List<Vector2> ViewConfig = new List<Vector2>
+                {
+                    //new Vector2(-1.5f, 0),
+                    new Vector2(-.5f, 0),
+                    new Vector2(.5f, 0)//,
+                    //new Vector2(1.5f, 0)
+                };
+                    mode = ControlMode.CameraDriven;
+                    InitLeiaDisplay(ViewConfig);
+                }
+                else //If leiadisplay added to a blank object do this
+                {
+                    MeshRenderer meshRenderer = GetComponentInChildren<MeshRenderer>();
+
+                    if (meshRenderer != null)
+                    {
+                        // Get the bounds of the object
+                        Bounds bounds = meshRenderer.bounds;
+
+                        // Calculate and print the height of the object
+                        float height = bounds.size.y;
+
+                        this.VirtualHeight = height * 4f;
+                    }
+
+                    List<Vector2> ViewConfig = new List<Vector2>
+                {
+                    //new Vector2(-1.5f, 0),
+                    new Vector2(-.5f, 0),
+                    new Vector2(.5f, 0) //,
+                    //new Vector2(1.5f, 0)
+                };
+                    mode = ControlMode.DisplayDriven;
+                    InitLeiaDisplay(ViewConfig);
+                }
+            }
+        }
+        #endregion
+        #endregion
+        #region Head_Functions
+        #region Head_Functions_LeiaDisplayNew
+
+        public int GetViewCount()
+        {
+            return ViewersHead.ViewConfig.Count;
+        }
+
+        public Camera GetEyeCamera(int index)
+        {
+            return ViewersHead.eyes[index].eyecamera;
+        }
+
+        public Eye GetEye(int index)
+        {
+            return ViewersHead.eyes[index];
+        }
+
+        void UpdateCameraFromVirtualDisplay()
+        {
+
+        }
+
+        void UpdateVirtualDisplayFromCamera()
+        {
+            VirtualHeight = 2f * Mathf.Tan(Mathf.Deg2Rad * (DriverCamera.fieldOfView / 2f)) * transform.localPosition.z;
+            ParallaxFactor = (ViewingDistanceMM * VirtualHeight) / (HeightMM * transform.localPosition.z);
+            if (ViewersHead != null)
+            {
+                this.ViewersHead.Update();
+            }
+        }
+
+        public Vector3 RealToVirtualCenterFacePosition(Vector3 FacePositionMM)
+        {
+            return Vector3.Scale(FacePositionMM, new Vector3(1f, 1f, -1f / ParallaxFactor)) * VirtualHeight / HeightMM;
+        }
+        #endregion
+        #endregion
+        #region Render_Functions
+
+        public void RenderImage()
+        {
+            RenderTrackingDevice.Instance.UpdateFacePosition();
+            viewerPositionPredicted = RenderTrackingDevice.Instance.GetPredictedFacePosition();
+            viewerPositionNonPredicted = RenderTrackingDevice.Instance.GetNonPredictedFacePosition();
+
+            if (viewerPositionNonPredicted == Vector3.zero)
+            {
+                ViewersHead.HeadPositionMM = new Vector3(0, 0, ViewingDistanceMM);
+            }
+            else
+            {
+                ViewersHead.HeadPositionMM = viewerPositionNonPredicted;
+            }
+
+#if UNITY_EDITOR
+            if (DesiredLightfieldMode == LightfieldMode.On && GetViewCount() == 2)
+            {
+                EnsureEditorPreivewMaterialInitialized();
+                SetEditorPreviewProperties();
+                Graphics.Blit(Texture2D.whiteTexture, _interlacedTexture, _editorPreviewMaterial);
+            }
+            else
+            {
+                Graphics.Blit(GetEyeCamera(0).targetTexture, _interlacedTexture);
+            }
+#elif UNITY_ANDROID && !UNITY_EDITOR
+            RenderTrackingDevice.Instance.Render(this, ref _interlacedTexture);
+#endif
+            Graphics.Blit(_interlacedTexture, Camera.current.activeTexture);
+        }
+
+        public void UpdateViews()
+        {
+            int viewResolutionX = RenderTrackingDevice.Instance.GetDeviceViewResolution().x;
+            int viewResolutionY = RenderTrackingDevice.Instance.GetDeviceViewResolution().y;
+
+            for (int ix = 0; ix < GetViewCount(); ix++)
+            {
+                Eye view = GetEye(ix);
+
+                string viewIdStr = string.Format("view_{0}_{1}", ix, 0);
+                view.SetTextureParams(viewResolutionX, viewResolutionY, viewIdStr);
+            }
+        }
+
+        private void UpdateInitialViewOffsets()
+        {
+            _initialViewOffsets = new Vector2[_numViewsX * _numViewsY];
+
+            // Calculate initial offsets to center the view grid
+            float baseOffsetX = -0.5f * (_numViewsX - 1.0f);
+            float baseOffsetY = -0.5f * (_numViewsY - 1.0f);
+
+            for (int viewY = 0; viewY < _numViewsY; viewY++)
+            {
+                for (int viewX = 0; viewX < _numViewsX; viewX++)
+                {
+                    // Calculate view offset based on base offsets and view indices
+                    float viewOffsetX = baseOffsetX + viewX;
+                    float viewOffsetY = baseOffsetY + viewY;
+
+                    _initialViewOffsets[viewX + viewY * _numViewsX] = new Vector2(viewOffsetX, viewOffsetY);
+                }
+            }
+        }
+
+        private float GetInitialViewOffsetX(int viewX, int viewY)
+        {
+            return _initialViewOffsets[viewX + viewY * _numViewsX].x;
+        }
+
+        private float GetInitialViewOffsetY(int viewX, int viewY)
+        {
+            return _initialViewOffsets[viewX + viewY * _numViewsX].y;
+        }
+        public static float GetViewportAspectFor(Camera renderingCamera)
+        {
+            return renderingCamera.pixelRect.width * 1.0f / renderingCamera.pixelRect.height;
+        }
+
+        public static Matrix4x4 GetConvergedProjectionMatrixForPosition(Camera Camera, Vector3 convergencePoint)
+        {
+            Matrix4x4 m = Matrix4x4.zero;
+
+            Vector3 cameraToConvergencePoint = convergencePoint - Camera.transform.position;
+
+            float far = Camera.farClipPlane;
+            float near = Camera.nearClipPlane;
+
+            // posX and posY are the camera-axis-aligned translations off of "root camera" position
+            float posX = -1 * Vector3.Dot(cameraToConvergencePoint, Camera.transform.right);
+            float posY = -1 * Vector3.Dot(cameraToConvergencePoint, Camera.transform.up);
+
+            // this is really posZ. it is better if posZ is positive-signed
+            float ConvergenceDistance = Mathf.Max(Vector3.Dot(cameraToConvergencePoint, Camera.transform.forward), 1E-5f);
+
+            if (Camera.orthographic)
+            {
+                // calculate the halfSizeX and halfSizeY values that we need for orthographic cameras
+
+                float halfSizeX = Camera.orthographicSize * GetViewportAspectFor(Camera);
+                float halfSizeY = Camera.orthographicSize;
+
+                // orthographic
+
+                // row 0
+                m[0, 0] = 1.0f / halfSizeX;
+                m[0, 1] = 0.0f;
+                m[0, 2] = -posX / (halfSizeX * ConvergenceDistance);
+                m[0, 3] = 0.0f;
+
+                // row 1
+                m[1, 0] = 0.0f;
+                m[1, 1] = 1.0f / halfSizeY;
+                m[1, 2] = -posY / (halfSizeY * ConvergenceDistance);
+                m[1, 3] = 0.0f;
+
+                // row 2
+                m[2, 0] = 0.0f;
+                m[2, 1] = 0.0f;
+                m[2, 2] = -2.0f / (far - near);
+                m[2, 3] = -(far + near) / (far - near);
+
+                // row 3
+                m[3, 0] = 0.0f;
+                m[3, 1] = 0.0f;
+                m[3, 2] = 0.0f;
+                m[3, 3] = 1.0f;
+            }
+            else
+            {
+                // calculate the halfSizeX and halfSizeY values for perspective DriverCamera that we would have gotten if we had used new CameraCalculatedParams.
+                // we don't need "f" (disparity per camera vertical pixel count) or EmissionRescalingFactor
+                const float minAspect = 1E-5f;
+                float aspect = Mathf.Max(GetViewportAspectFor(Camera), minAspect);
+                float halfSizeY = ConvergenceDistance * Mathf.Tan(Camera.fieldOfView * Mathf.PI / 360.0f);
+                float halfSizeX = aspect * halfSizeY;
+
+                // perspective
+
+                // row 0
+                m[0, 0] = ConvergenceDistance / halfSizeX;
+                m[0, 1] = 0.0f;
+                m[0, 2] = -posX / halfSizeX;
+                m[0, 3] = 0.0f;
+
+                // row 1
+                m[1, 0] = 0.0f;
+                m[1, 1] = ConvergenceDistance / halfSizeY;
+                m[1, 2] = -posY / halfSizeY;
+                m[1, 3] = 0.0f;
+
+                // row 2
+                m[2, 0] = 0.0f;
+                m[2, 1] = 0.0f;
+                m[2, 2] = -(far + near) / (far - near);
+                m[2, 3] = -2.0f * far * near / (far - near);
+
+                // row 3
+                m[3, 0] = 0.0f;
+                m[3, 1] = 0.0f;
+                m[3, 2] = -1.0f;
+                m[3, 3] = 0.0f;
+            }
+            return m;
+        }
+
+        #region Render_Functions_LeiaDisplayNew
+
+        public Matrix4x4 GetProjectionMatrixForCamera(Camera camera, Vector3 offset, bool isEye)
+        {
+            float W = VirtualWidth;
+            float H = VirtualHeight;
+
+            Vector3 cameraPositionRelativeToDisplay = camera.transform.InverseTransformPoint(transform.position);
+
+            Vector3 cameraRelative = -cameraPositionRelativeToDisplay; //camera.transform.localPosition + offset;
+
+            float xc = cameraRelative.x;
+            float yc = cameraRelative.y;
+            float zc = cameraRelative.z;
+
+            float r = -(W / 2 - xc) / zc; //minus sign is to make zc positive
+            float l = -(-W / 2 - xc) / zc;
+            float t = -(H / 2 - yc) / zc;
+            float b = -(-H / 2 - yc) / zc;
+
+            float far = camera.farClipPlane;
+            float near = camera.nearClipPlane;
+
+            Matrix4x4 p = new Matrix4x4();
+
+            p.m00 = 2 / (r - l);
+            p.m11 = 2 / (t - b);
+            p.m02 = (r + l) / (r - l);
+            p.m12 = (t + b) / (t - b);
+            p.m22 = -(far + near) / (far - near);
+            p.m32 = -1;
+            p.m23 = -(2 * far * near) / (far - near);
+
+            // row 1
+            p.m10 = 0.0f;
+            p.m13 = 0.0f;
+
+            // row 2
+            p.m20 = 0.0f;
+            p.m21 = 0.0f;
+
+            // row 3
+            p.m30 = 0.0f;
+            p.m31 = 0.0f;
+            p.m33 = 0.0f;
+
+            return p;
+        }
+
+        public void DrawFrustum(Transform camera)
+        {
+            if (camera == null)
+            {
+                return;
+            }
+
+            Vector3 TopLeftCorner = new Vector3(
+                    VirtualWidth / 2f,
+                    VirtualHeight / 2f,
+                    0
+                    );
+
+            Vector3 TopRightCorner = new Vector3(
+                    -VirtualWidth / 2f,
+                    VirtualHeight / 2f,
+                    0
+                    );
+
+            Vector3 BottomLeftCorner = new Vector3(
+                    VirtualWidth / 2f,
+                    -VirtualHeight / 2f,
+                    0
+                    );
+
+            Vector3 BottomRightCorner = new Vector3(
+                    -VirtualWidth / 2f,
+                    -VirtualHeight / 2f,
+                    0
+                    );
+
+            TopLeftCorner = transform.position + transform.rotation * TopLeftCorner;
+            TopRightCorner = transform.position + transform.rotation * TopRightCorner;
+            BottomLeftCorner = transform.position + transform.rotation * BottomLeftCorner;
+            BottomRightCorner = transform.position + transform.rotation * BottomRightCorner;
+
+            Gizmos.DrawLine(camera.position, TopLeftCorner);
+            Gizmos.DrawLine(camera.position, TopRightCorner);
+            Gizmos.DrawLine(camera.position, BottomLeftCorner);
+            Gizmos.DrawLine(camera.position, BottomRightCorner);
         }
 
         #endregion
-    } // end LeiaDisplay
-
-    /// <summary>
-    /// A class for applying scale, translate, and/or zero-ing operations to floats
-    /// </summary>
-    [System.Serializable]
-    public class ToggleScaleTranslate
-    {
-        public enum ModificationMode
+        #endregion
+        #region 2D_3D
+        public int Get2D3DMode()
         {
-            ON, // F(x) returns x * s + t
-            ZERO, // F(x) returns 0
-            NOSHIFT // aka identity or pass-through. F(x) returns x
+            return RenderTrackingDevice.Instance.Get2D3DMode() ? 3 : 2;
         }
 
-        public ToggleScaleTranslate(float s, float t, ModificationMode m)
+        public void Set2D3DMode(int modeId)
         {
-            scale = s;
-            offset = t;
-            mode = m;
+            RenderTrackingDevice.Instance.Set2D3DMode(modeId == 3);
         }
 
-        [SerializeField] public float scale = 1.0f;
-        [SerializeField] public float offset = 0.0f;
-
-        [SerializeField] public ModificationMode mode;
-
-        public static float operator *(ToggleScaleTranslate left, float right)
+        private void Request2D3DUpdate()
         {
-            if (left.mode == ModificationMode.ZERO) return 0.0f;
-            if (left.mode == ModificationMode.NOSHIFT) return right;
-
-            // case ON: apply scale then translation
-            return (left.scale * right + left.offset);
+            if (this.DesiredLightfieldMode == LightfieldMode.On)
+            {
+                Set2D3DMode(3);
+                _numViewsX = 2;
+            }
+            else
+            {
+                Set2D3DMode(2);
+                _numViewsX = 1;
+            }
         }
+
+        #endregion
+        #region Device_Values
+
+        public Vector2Int GetDeviceViewResolution()
+        {
+            if (RenderTrackingDevice.Instance != null)
+            {
+                return RenderTrackingDevice.Instance.GetDeviceViewResolution();
+            }
+            return new Vector2Int(1280, 800);
+        }
+        public float GetDeviceSystemDisparityPixels()
+        {
+            if (RenderTrackingDevice.Instance != null)
+            {
+                return RenderTrackingDevice.Instance.GetDeviceSystemDisparityPixels();
+            }
+            return 4.0f;
+        }
+
+        #endregion
+        #region Editor_Preview
+
+        private void EnsureEditorPreivewMaterialInitialized()
+        {
+            if (_editorPreviewMaterial == null)
+            {
+                _editorPreviewMaterial = new Material(Resources.Load<Shader>(_editorPreviewShaderName));
+            }
+        }
+
+        private void SetEditorPreviewProperties()
+        {
+            // default values from LumePad 2
+            const int defaultPanelResolutionX = 2560;
+            const int defaultPanelResolutionY = 1600;
+            const float defaultNumViews = 8;
+            const float defaultActSingleTapCoef = 0.12f;
+            const float defaultPixelPitch = 0.10389f;
+            const float defaultN = 1.6f;
+            const float defaultDOverN = 0.6926f;
+            const float defaultS = 10.687498f;
+            const float defaultAnglePx = 0.1759291824068146f; // theta
+            const float defaultNo = 4.629999965429306f; // center view number
+            const float defaultPOverDu = 3.0f;
+            const float defaultPOverDv = 1.0f;
+            const float defaultGamma = 1.99f;
+            const float defaultSmooth = 0.05f;
+            const float defaultOePitchX = defaultNumViews / defaultPOverDu;
+            const float defaultTanSlantAngle = defaultPOverDv / defaultPOverDu;
+            Vector3 defaultSubpixelCentersX = new Vector3(-0.333f, 0.0f, 0.333f);
+            Vector3 defaultSubpixelCentersY = new Vector3(0.0f, 0.0f, 0.0f);
+            if (GetViewCount() == 2)
+            {
+                _editorPreviewMaterial.SetTexture("_texture_0", GetEyeCamera(0).targetTexture);
+                _editorPreviewMaterial.SetTexture("_texture_1", GetEyeCamera(1).targetTexture);
+            }
+
+            if (DesiredPreviewMode == EditorPreviewMode.SideBySide)
+            {
+                _editorPreviewMaterial.EnableKeyword("SideBySide");
+            }
+            else if (DesiredPreviewMode == EditorPreviewMode.Interlaced)
+            {
+                _editorPreviewMaterial.DisableKeyword("SideBySide");
+
+                _editorPreviewMaterial.SetInt("_width", defaultPanelResolutionX);
+                _editorPreviewMaterial.SetInt("_height", defaultPanelResolutionY);
+                _editorPreviewMaterial.SetFloat("_actSingleTapCoef", defaultActSingleTapCoef);
+                _editorPreviewMaterial.SetFloat("_pixelPitch", defaultPixelPitch);
+                _editorPreviewMaterial.SetFloat("_n", defaultN);
+                _editorPreviewMaterial.SetFloat("_d_over_n", defaultDOverN);
+                _editorPreviewMaterial.SetFloat("_s", defaultS);
+                _editorPreviewMaterial.SetFloat("_anglePx", defaultAnglePx);
+                _editorPreviewMaterial.SetFloat("_no", defaultNo);
+                _editorPreviewMaterial.SetFloat("_gamma", defaultGamma);
+                _editorPreviewMaterial.SetFloat("_smooth", defaultSmooth);
+                _editorPreviewMaterial.SetFloat("_oePitchX", defaultOePitchX);
+                _editorPreviewMaterial.SetFloat("_tanSlantAngle", defaultTanSlantAngle);
+                _editorPreviewMaterial.SetFloat("_faceX", viewerPositionPredicted.x);
+                _editorPreviewMaterial.SetFloat("_faceY", viewerPositionPredicted.y);
+                _editorPreviewMaterial.SetFloat("_faceZ", viewerPositionPredicted.z);
+                _editorPreviewMaterial.SetVector("_subpixelCentersX", defaultSubpixelCentersX);
+                _editorPreviewMaterial.SetVector("_subpixelCentersY", defaultSubpixelCentersY);
+            }
+            _editorPreviewMaterial.SetFloat("_numViews", defaultNumViews);
+        }
+
+        #endregion
     }
-
-
-} // end LeiaLoft namespace
+}

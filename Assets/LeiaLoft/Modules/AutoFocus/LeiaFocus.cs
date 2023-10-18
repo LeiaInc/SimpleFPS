@@ -7,7 +7,7 @@ namespace LeiaLoft
     [DefaultExecutionOrder(3)]
     public abstract class LeiaFocus : MonoBehaviour
     {
-        protected LeiaCamera leiaCamera;
+        protected LeiaDisplay leiaDisplay;
         
         [Tooltip("The range of allowable baseline scaling values for the Leia Camera. Can be used to prevent depth from becoming too large or too small.")]
         [SerializeField] MinMaxPair _baselineRange = new MinMaxPair(1f, 0, "MinBaseline", 10f, 100, "MaxBaseline");
@@ -19,15 +19,42 @@ namespace LeiaLoft
         private float _depthScale = 1.0f;
 
         [Tooltip("Minimum percentage the computed convergence must change by before the target value is updated. If the convergence plane is jittery, try increasing this value.")]
-        [SerializeField, Range(0,1)] private float convergenceChangeThreshold = .01f;
+        [SerializeField, Range(0,1)] public float convergenceChangeThreshold = .01f;
         [Tooltip("Minimum percentage the computed baseline must change by before the target value is updated. If the Leia Camera bounds are jittery, try increasing this value.")]
-        [SerializeField, Range(0,1)] private float baselineChangeThreshold = .05f;
+        [SerializeField, Range(0,1)] public float baselineChangeThreshold = .05f;
         
         protected float targetConvergence;
         private float targetConvergencePrev;
 
         private float targetBaseline;
         private float targetBaselinePrev;
+
+        [SerializeField] private bool _setConvergence = true;
+        [SerializeField] private bool _setBaselineScaling = true;
+
+        public bool SetConvergence
+        {
+            get
+            {
+                return _setConvergence;
+            }
+            set
+            {
+                _setConvergence = value;
+            }
+        }
+
+        public bool SetBaselineScaling
+        {
+            get
+            {
+                return _setBaselineScaling;
+            }
+            set
+            {
+                _setBaselineScaling = value;
+            }
+        }
 
         public float DepthScale
         {
@@ -40,7 +67,7 @@ namespace LeiaLoft
                 _depthScale = Mathf.Clamp(value, 0, float.MaxValue);
             }
         }
-
+        
         public float MinBaseline
         {
             get
@@ -62,6 +89,30 @@ namespace LeiaLoft
             set
             {
                 _baselineRange.max = Mathf.Clamp(value, 0, float.MaxValue);
+            }
+        }
+        
+        public float MinConvergence
+        {
+            get
+            {
+                return _convergenceRange.min;
+            }
+            set
+            {
+                _convergenceRange.min = Mathf.Clamp(value, 0, float.MaxValue);
+            }
+        }
+
+        public float MaxConvergence
+        {
+            get
+            {
+                return _convergenceRange.max;
+            }
+            set
+            {
+                _convergenceRange.max = Mathf.Clamp(value, 0, float.MaxValue);
             }
         }
 
@@ -109,6 +160,8 @@ namespace LeiaLoft
                 _focusOffset = value;
             }
         }
+
+        public 
 
         RunningFloatAverage targetConvergenceHistory;
         const int targetConvergenceHistoryLength = 5;
@@ -214,8 +267,14 @@ namespace LeiaLoft
 
         protected virtual void LateUpdate()
         {
-            UpdateBaselineScaling();
-            UpdateConvergenceDistance();
+            if (this.SetBaselineScaling)
+            {
+                UpdateBaselineScaling();
+            }
+            if (this.SetConvergence)
+            {
+                UpdateConvergenceDistance();
+            }
         }
 
         public void AddOffset(float offset)

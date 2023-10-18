@@ -1,4 +1,5 @@
 ﻿using UnityEngine;
+using UnityEngine.EventSystems;
 
 namespace LeiaLoft.Examples
 {
@@ -9,6 +10,7 @@ namespace LeiaLoft.Examples
         private Vector3 startPosition = Vector3.zero;
         private Transform childCamera = null;
         private bool multiTouching = false;
+        bool startedOnUI = false;
 
         void Start()
         {
@@ -17,6 +19,15 @@ namespace LeiaLoft.Examples
 
         void LateUpdate()
         {
+            if (startedOnUI)
+            {
+                if (Input.GetMouseButtonUp(0) || Input.GetMouseButtonUp(2))
+                {
+                    startedOnUI = false;
+                }
+                return;
+            }
+
             if (Input.touchCount > 1)
             {
                 multiTouching = true;
@@ -36,6 +47,11 @@ namespace LeiaLoft.Examples
 
             if (Input.GetMouseButtonDown(0) || Input.GetMouseButtonDown(2))
             {
+                if (EventSystem.current.IsPointerOverGameObject())
+                {
+                    startedOnUI = true;
+                    return;
+                }
                 startMousePosition = Input.mousePosition;
                 startPosition = transform.position;
             }

@@ -1,4 +1,5 @@
 ﻿using UnityEngine;
+using UnityEngine.EventSystems;
 
 namespace LeiaLoft.Examples
 {
@@ -32,6 +33,11 @@ namespace LeiaLoft.Examples
 
         void LateUpdate()
         {
+            if (EventSystem.current.IsPointerOverGameObject())
+            {
+                return;
+            }
+
             if (Mathf.Abs(Input.mouseScrollDelta.y) > 0)
             {
                 zooming = true;
